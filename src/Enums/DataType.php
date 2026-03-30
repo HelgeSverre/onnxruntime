@@ -101,6 +101,7 @@ enum DataType: int
             self::UINT32 => 'uint32_t',
             self::UINT64 => 'uint64_t',
             self::BOOL => 'bool',
+            self::FLOAT16, self::BFLOAT16 => 'uint16_t',
             default => throw new InvalidArgumentException("No FFI type for {$this->name}")
         };
     }
@@ -117,6 +118,7 @@ enum DataType: int
             self::INT16, self::UINT16 => 2,
             self::INT32, self::UINT32 => 4,
             self::INT64, self::UINT64 => 8,
+            self::FLOAT16, self::BFLOAT16 => 2,
             default => throw new InvalidArgumentException("Unknown size for {$this->name}")
         };
     }
