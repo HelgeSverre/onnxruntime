@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace PhpMlKit\ONNXRuntime\Generation;
 
+use PhpMlKit\ONNXRuntime\Exceptions\InvalidArgumentException;
+
 /**
  * ByteLevel BPE tokenizer compatible with HuggingFace tokenizer.json format.
  *
@@ -54,7 +56,7 @@ final class BpeTokenizer
         [$this->byteEncoder, $this->byteDecoder] = self::buildByteMapping();
 
         // GPT-2 pre-tokenization regex (with unicode support)
-        $this->pattern = "/('s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+)/u";
+        $this->pattern = "/('s|'t|'re|'ve|'m|'ll|'d| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+)/u";
     }
 
     /**
@@ -62,10 +64,10 @@ final class BpeTokenizer
      */
     public static function fromFile(string $path): self
     {
-        $json = json_decode(file_get_contents($path), true, 512, JSON_THROW_ON_ERROR);
+        $json = json_decode(file_get_contents($path), true, 512, \JSON_THROW_ON_ERROR);
 
         if (($json['model']['type'] ?? '') !== 'BPE') {
-            throw new \InvalidArgumentException("Only BPE tokenizers are supported, got: " . ($json['model']['type'] ?? 'unknown'));
+            throw new InvalidArgumentException('Only BPE tokenizers are supported, got: '.($json['model']['type'] ?? 'unknown'));
         }
 
         $vocab = $json['model']['vocab'];
@@ -73,8 +75,8 @@ final class BpeTokenizer
         $mergeRanks = [];
         foreach ($json['model']['merges'] as $i => $merge) {
             // Merges can be either [a, b] arrays or "a b" strings
-            if (is_array($merge)) {
-                $key = $merge[0] . ' ' . $merge[1];
+            if (\is_array($merge)) {
+                $key = $merge[0].' '.$merge[1];
             } else {
                 $key = $merge;
             }
@@ -98,7 +100,7 @@ final class BpeTokenizer
      */
     public function encode(string $text): array
     {
-        if ($text === '') {
+        if ('' === $text) {
             return [];
         }
 
@@ -110,10 +112,11 @@ final class BpeTokenizer
         foreach ($segments as [$segment, $isSpecial]) {
             if ($isSpecial) {
                 $ids[] = $this->specialTokens[$segment];
+
                 continue;
             }
 
-            if ($segment === '') {
+            if ('' === $segment) {
                 continue;
             }
 
@@ -191,7 +194,7 @@ final class BpeTokenizer
      */
     public function vocabSize(): int
     {
-        return count($this->vocab) + count($this->specialTokens);
+        return \count($this->vocab) + \count($this->specialTokens);
     }
 
     /**
@@ -210,33 +213,33 @@ final class BpeTokenizer
     private function bpe(string $word): array
     {
         $chars = mb_str_split($word);
-        if (count($chars) <= 1) {
+        if (\count($chars) <= 1) {
             return $chars;
         }
 
         // Start with individual characters as the initial tokens
         $pieces = $chars;
 
-        while (count($pieces) > 1) {
+        while (\count($pieces) > 1) {
             // Find the highest priority merge pair
-            $bestRank = PHP_INT_MAX;
+            $bestRank = \PHP_INT_MAX;
             $bestIdx = -1;
 
-            for ($i = 0; $i < count($pieces) - 1; $i++) {
-                $pair = $pieces[$i] . ' ' . $pieces[$i + 1];
-                $rank = $this->mergeRanks[$pair] ?? PHP_INT_MAX;
+            for ($i = 0; $i < \count($pieces) - 1; ++$i) {
+                $pair = $pieces[$i].' '.$pieces[$i + 1];
+                $rank = $this->mergeRanks[$pair] ?? \PHP_INT_MAX;
                 if ($rank < $bestRank) {
                     $bestRank = $rank;
                     $bestIdx = $i;
                 }
             }
 
-            if ($bestIdx === -1) {
+            if (-1 === $bestIdx) {
                 break; // No more merges possible
             }
 
             // Apply the merge
-            $merged = $pieces[$bestIdx] . $pieces[$bestIdx + 1];
+            $merged = $pieces[$bestIdx].$pieces[$bestIdx + 1];
             array_splice($pieces, $bestIdx, 2, [$merged]);
         }
 
@@ -256,15 +259,15 @@ final class BpeTokenizer
 
         // Sort special tokens by length (longest first) to avoid partial matches
         $tokens = array_keys($this->specialTokens);
-        usort($tokens, fn(string $a, string $b) => mb_strlen($b) - mb_strlen($a));
+        usort($tokens, static fn (string $a, string $b) => mb_strlen($b) - mb_strlen($a));
 
-        $pattern = '/(' . implode('|', array_map('preg_quote', $tokens)) . ')/u';
+        $pattern = '/('.implode('|', array_map('preg_quote', $tokens)).')/u';
 
-        $parts = preg_split($pattern, $text, -1, PREG_SPLIT_DELIM_CAPTURE);
+        $parts = preg_split($pattern, $text, -1, \PREG_SPLIT_DELIM_CAPTURE);
         $segments = [];
 
         foreach ($parts as $part) {
-            if ($part === '') {
+            if ('' === $part) {
                 continue;
             }
             $segments[] = [$part, isset($this->specialTokens[$part])];
@@ -289,24 +292,24 @@ final class BpeTokenizer
 
         // Printable ASCII-ish ranges that map to themselves
         // ! to ~ (33-126)
-        for ($b = ord('!'); $b <= ord('~'); $b++) {
+        for ($b = \ord('!'); $b <= \ord('~'); ++$b) {
             $byteEncoder[$b] = mb_chr($b);
         }
         // ¡ to ¬ (161-172)
-        for ($b = 0xA1; $b <= 0xAC; $b++) {
+        for ($b = 0xA1; $b <= 0xAC; ++$b) {
             $byteEncoder[$b] = mb_chr($b);
         }
         // ® to ÿ (174-255)
-        for ($b = 0xAE; $b <= 0xFF; $b++) {
+        for ($b = 0xAE; $b <= 0xFF; ++$b) {
             $byteEncoder[$b] = mb_chr($b);
         }
 
         // Everything else gets mapped to 256+
         $offset = 256;
-        for ($b = 0; $b < 256; $b++) {
+        for ($b = 0; $b < 256; ++$b) {
             if (!isset($byteEncoder[$b])) {
                 $byteEncoder[$b] = mb_chr($offset);
-                $offset++;
+                ++$offset;
             }
         }
 

@@ -7,13 +7,18 @@ namespace PhpMlKit\ONNXRuntime\Tests\Generation;
 use PhpMlKit\ONNXRuntime\Generation\BpeTokenizer;
 use PHPUnit\Framework\TestCase;
 
+/**
+ * @internal
+ *
+ * @coversNothing
+ */
 class BpeTokenizerTest extends TestCase
 {
     private static ?BpeTokenizer $tokenizer = null;
 
     public static function setUpBeforeClass(): void
     {
-        $path = dirname(__DIR__, 2) . '/models/granite-3.0-2b-instruct/tokenizer.json';
+        $path = \dirname(__DIR__, 2).'/models/granite-3.0-2b-instruct/tokenizer.json';
         if (!file_exists($path)) {
             self::markTestSkipped('Granite tokenizer.json not found. Download it first.');
         }

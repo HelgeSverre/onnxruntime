@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace PhpMlKit\ONNXRuntime\Generation;
 
 use PhpMlKit\ONNXRuntime\Enums\DataType;
+use PhpMlKit\ONNXRuntime\Exceptions\InvalidArgumentException;
 use PhpMlKit\ONNXRuntime\InferenceSession;
 use PhpMlKit\ONNXRuntime\OrtValue;
 use PhpMlKit\ONNXRuntime\SessionOptions;
@@ -64,7 +65,7 @@ final class TextGenerator
         $this->hasPositionIds = isset($this->session->inputs()['position_ids']);
 
         // Cache the KV tensor names
-        for ($i = 0; $i < $this->numLayers; $i++) {
+        for ($i = 0; $i < $this->numLayers; ++$i) {
             $this->kvInputNames[] = "past_key_values.{$i}.key";
             $this->kvInputNames[] = "past_key_values.{$i}.value";
             $this->kvOutputNames[] = "present.{$i}.key";
@@ -81,13 +82,13 @@ final class TextGenerator
         ?string $configPath = null,
         ?SessionOptions $sessionOptions = null,
     ): self {
-        $configPath ??= dirname($modelPath) . '/config.json';
+        $configPath ??= \dirname($modelPath).'/config.json';
 
         if (!file_exists($configPath)) {
-            throw new \InvalidArgumentException("Config file not found: {$configPath}");
+            throw new InvalidArgumentException("Config file not found: {$configPath}");
         }
 
-        $config = json_decode(file_get_contents($configPath), true, 512, JSON_THROW_ON_ERROR);
+        $config = json_decode(file_get_contents($configPath), true, 512, \JSON_THROW_ON_ERROR);
         $tokenizer = BpeTokenizer::fromFile($tokenizerPath);
         $session = InferenceSession::fromFile($modelPath, $sessionOptions);
 
@@ -97,11 +98,12 @@ final class TextGenerator
     /**
      * Generate text from a prompt.
      *
-     * @param string $prompt The input text
-     * @param int $maxTokens Maximum number of tokens to generate
-     * @param Sampler|null $sampler Sampling strategy (defaults to greedy)
-     * @param callable|null $onToken Callback for each generated token: fn(string $token, int $tokenId): bool
-     *                                Return false to stop generation early.
+     * @param string        $prompt    The input text
+     * @param int           $maxTokens Maximum number of tokens to generate
+     * @param null|Sampler  $sampler   Sampling strategy (defaults to greedy)
+     * @param null|callable $onToken   callback for each generated token: fn(string $token, int $tokenId): bool
+     *                                 Return false to stop generation early
+     *
      * @return string The generated text (not including the prompt)
      */
     public function generate(
@@ -125,8 +127,8 @@ final class TextGenerator
         $kvCache = null;
         $pastSeqLen = 0;
 
-        for ($step = 0; $step < $maxTokens; $step++) {
-            if ($step === 0) {
+        for ($step = 0; $step < $maxTokens; ++$step) {
+            if (0 === $step) {
                 // Prefill: process all prompt tokens at once
                 $currentIds = $inputIds;
             } else {
@@ -134,10 +136,10 @@ final class TextGenerator
                 $currentIds = [end($generatedIds)];
             }
 
-            $seqLen = count($currentIds);
+            $seqLen = \count($currentIds);
             $totalSeqLen = $pastSeqLen + $seqLen;
 
-            // Build inputs
+            // Build inputs (creates new OrtValue objects for input_ids, attention_mask, position_ids)
             $inputs = $this->buildInputs($currentIds, $totalSeqLen, $kvCache, $pastSeqLen);
 
             // Request only logits and present KV-cache
@@ -146,6 +148,13 @@ final class TextGenerator
             // Run inference
             $outputs = $this->session->run($inputs, $outputNames);
 
+            // Dispose input OrtValues we created (not KV-cache — those are output references)
+            $inputs['input_ids']->dispose();
+            $inputs['attention_mask']->dispose();
+            if (isset($inputs['position_ids'])) {
+                $inputs['position_ids']->dispose();
+            }
+
             // Extract logits for the last token position
             // Shape: [1, seq_len, vocab_size] → we want [vocab_size] at the last position
             $logitsValue = $outputs['logits'];
@@ -153,7 +162,7 @@ final class TextGenerator
             $lastLogits = $allLogits[0][$seqLen - 1];
 
             // Apply Granite logits scaling
-            if ($this->logitsScaling !== 1.0) {
+            if (1.0 !== $this->logitsScaling) {
                 foreach ($lastLogits as &$logit) {
                     $logit /= $this->logitsScaling;
                 }
@@ -163,27 +172,55 @@ final class TextGenerator
             // Sample next token
             $nextTokenId = $sampler->sample($lastLogits, array_merge($inputIds, $generatedIds));
 
+            // Dispose logits output (no longer needed after sampling)
+            $logitsValue->dispose();
+
             // Check for EOS
             if ($nextTokenId === $eosTokenId) {
+                // Dispose remaining outputs before breaking
+                foreach ($this->kvOutputNames as $name) {
+                    if (isset($outputs[$name])) {
+                        $outputs[$name]->dispose();
+                    }
+                }
+
                 break;
             }
 
             $generatedIds[] = $nextTokenId;
 
             // Callback
-            if ($onToken !== null) {
+            if (null !== $onToken) {
                 $tokenText = $this->tokenizer->decode([$nextTokenId]);
-                if ($onToken($tokenText, $nextTokenId) === false) {
+                if (false === $onToken($tokenText, $nextTokenId)) {
+                    // Dispose remaining outputs before breaking
+                    foreach ($this->kvOutputNames as $name) {
+                        if (isset($outputs[$name])) {
+                            $outputs[$name]->dispose();
+                        }
+                    }
+
                     break;
+                }
+            }
+
+            // Dispose old KV-cache from previous iteration before replacing
+            if (null !== $kvCache) {
+                foreach ($kvCache as $value) {
+                    $value->dispose();
                 }
             }
 
             // Update KV-cache for next step
             $kvCache = $this->extractKvCache($outputs);
             $pastSeqLen = $totalSeqLen;
+        }
 
-            // Free the outputs we no longer need
-            $logitsValue->dispose();
+        // Dispose any remaining KV-cache after generation completes
+        if (null !== $kvCache) {
+            foreach ($kvCache as $value) {
+                $value->dispose();
+            }
         }
 
         return $this->tokenizer->decode($generatedIds);
@@ -203,7 +240,8 @@ final class TextGenerator
             $prompt .= "<|start_of_role|>{$role}<|end_of_role|>{$content}<|end_of_text|>\n";
         }
         // Add the assistant prefix to trigger generation
-        $prompt .= "<|start_of_role|>assistant<|end_of_role|>";
+        $prompt .= '<|start_of_role|>assistant<|end_of_role|>';
+
         return $prompt;
     }
 
@@ -218,10 +256,11 @@ final class TextGenerator
     /**
      * Build the input tensors for a single inference step.
      *
-     * @param int[] $tokenIds Current token IDs to process
-     * @param int $totalSeqLen Total sequence length including past
-     * @param array<string, OrtValue>|null $kvCache Previous KV-cache tensors
-     * @param int $pastSeqLen Length of the past sequence (KV-cache)
+     * @param int[]                        $tokenIds    Current token IDs to process
+     * @param int                          $totalSeqLen Total sequence length including past
+     * @param null|array<string, OrtValue> $kvCache     Previous KV-cache tensors
+     * @param int                          $pastSeqLen  Length of the past sequence (KV-cache)
+     *
      * @return array<string, OrtValue>
      */
     private function buildInputs(
@@ -230,7 +269,7 @@ final class TextGenerator
         ?array $kvCache,
         int $pastSeqLen,
     ): array {
-        $seqLen = count($tokenIds);
+        $seqLen = \count($tokenIds);
 
         // input_ids: [1, seq_len]
         $inputs = [
@@ -248,7 +287,7 @@ final class TextGenerator
         }
 
         // KV-cache tensors
-        if ($kvCache !== null) {
+        if (null !== $kvCache) {
             // Use the KV-cache from previous step
             foreach ($this->kvInputNames as $name) {
                 $outputName = str_replace('past_key_values.', 'present.', $name);
@@ -272,21 +311,10 @@ final class TextGenerator
      */
     private function createEmptyKvCache(array &$inputs): void
     {
-        $ffi = \PhpMlKit\ONNXRuntime\FFI\Lib::get();
-
         foreach ($this->kvInputNames as $name) {
             // Create a zero-length tensor with shape [1, num_kv_heads, 0, head_dim]
-            // For empty tensors, we need a minimal buffer
             $shape = [1, $this->numKvHeads, 0, $this->headDim];
-
-            if ($this->kvDataType === DataType::FLOAT16) {
-                // float16 stored as uint16_t
-                $buffer = $ffi->new('uint16_t[1]');
-                $inputs[$name] = OrtValue::fromBuffer($buffer, 0, DataType::FLOAT16, $shape);
-            } else {
-                $buffer = $ffi->new('float[1]');
-                $inputs[$name] = OrtValue::fromBuffer($buffer, 0, DataType::FLOAT, $shape);
-            }
+            $inputs[$name] = OrtValue::fromArray([], $this->kvDataType, $shape);
         }
     }
 
@@ -294,6 +322,7 @@ final class TextGenerator
      * Extract KV-cache OrtValues from model outputs.
      *
      * @param array<string, OrtValue> $outputs
+     *
      * @return array<string, OrtValue>
      */
     private function extractKvCache(array $outputs): array
@@ -304,6 +333,7 @@ final class TextGenerator
                 $kvCache[$name] = $outputs[$name];
             }
         }
+
         return $kvCache;
     }
 

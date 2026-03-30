@@ -7,6 +7,11 @@ namespace PhpMlKit\ONNXRuntime\Tests\Generation;
 use PhpMlKit\ONNXRuntime\Generation\Sampler;
 use PHPUnit\Framework\TestCase;
 
+/**
+ * @internal
+ *
+ * @coversNothing
+ */
 class SamplerTest extends TestCase
 {
     public function testGreedySampling(): void

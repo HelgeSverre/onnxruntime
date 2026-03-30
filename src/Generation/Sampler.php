@@ -22,13 +22,13 @@ final class Sampler
     /**
      * Sample a token ID from logits.
      *
-     * @param float[] $logits Raw logits from the model (vocab_size length)
-     * @param int[] $generatedIds Previously generated token IDs (for repetition penalty)
+     * @param float[] $logits       Raw logits from the model (vocab_size length)
+     * @param int[]   $generatedIds Previously generated token IDs (for repetition penalty)
      */
     public function sample(array $logits, array $generatedIds = []): int
     {
         // Apply repetition penalty
-        if ($this->repetitionPenalty !== 1.0 && !empty($generatedIds)) {
+        if (1.0 !== $this->repetitionPenalty && !empty($generatedIds)) {
             foreach (array_unique($generatedIds) as $id) {
                 if (isset($logits[$id])) {
                     if ($logits[$id] > 0) {
@@ -46,7 +46,7 @@ final class Sampler
         }
 
         // Apply temperature
-        if ($this->temperature !== 1.0) {
+        if (1.0 !== $this->temperature) {
             foreach ($logits as &$logit) {
                 $logit /= $this->temperature;
             }
@@ -65,7 +65,24 @@ final class Sampler
 
         // Convert to probabilities and sample
         $probs = $this->softmax($logits);
+
         return $this->weightedSample($probs);
+    }
+
+    /**
+     * Create a greedy sampler (always picks the most likely token).
+     */
+    public static function greedy(): self
+    {
+        return new self(temperature: 0.0);
+    }
+
+    /**
+     * Create a sampler with typical conversational settings.
+     */
+    public static function creative(float $temperature = 0.7, float $topP = 0.9): self
+    {
+        return new self(temperature: $temperature, topP: $topP);
     }
 
     /**
@@ -75,7 +92,7 @@ final class Sampler
      */
     private function argmax(array $logits): int
     {
-        $maxVal = -INF;
+        $maxVal = -\INF;
         $maxIdx = 0;
 
         foreach ($logits as $i => $val) {
@@ -92,19 +109,20 @@ final class Sampler
      * Keep only the top-K logits, setting everything else to -INF.
      *
      * @param float[] $logits
+     *
      * @return float[]
      */
     private function applyTopK(array $logits, int $k): array
     {
-        $k = min($k, count($logits));
+        $k = min($k, \count($logits));
         $sorted = $logits;
         arsort($sorted);
-        $topIndices = array_slice(array_keys($sorted), 0, $k, true);
+        $topIndices = \array_slice(array_keys($sorted), 0, $k, true);
         $topSet = array_flip($topIndices);
 
         foreach ($logits as $i => &$val) {
             if (!isset($topSet[$i])) {
-                $val = -INF;
+                $val = -\INF;
             }
         }
         unset($val);
@@ -116,6 +134,7 @@ final class Sampler
      * Keep only the smallest set of tokens whose cumulative probability exceeds p.
      *
      * @param float[] $logits
+     *
      * @return float[]
      */
     private function applyTopP(array $logits, float $p): array
@@ -136,7 +155,7 @@ final class Sampler
 
         foreach ($logits as $i => &$val) {
             if (!isset($keepSet[$i])) {
-                $val = -INF;
+                $val = -\INF;
             }
         }
         unset($val);
@@ -148,6 +167,7 @@ final class Sampler
      * Compute softmax probabilities from logits.
      *
      * @param float[] $logits
+     *
      * @return float[]
      */
     private function softmax(array $logits): array
@@ -158,7 +178,7 @@ final class Sampler
         $sum = 0.0;
 
         foreach ($logits as $i => $val) {
-            if ($val === -INF) {
+            if ($val === -\INF) {
                 $exps[$i] = 0.0;
             } else {
                 $exp = exp($val - $max);
@@ -196,22 +216,7 @@ final class Sampler
 
         // Fallback: return last token (shouldn't normally reach here)
         $keys = array_keys($probs);
+
         return end($keys);
-    }
-
-    /**
-     * Create a greedy sampler (always picks the most likely token).
-     */
-    public static function greedy(): self
-    {
-        return new self(temperature: 0.0);
-    }
-
-    /**
-     * Create a sampler with typical conversational settings.
-     */
-    public static function creative(float $temperature = 0.7, float $topP = 0.9): self
-    {
-        return new self(temperature: $temperature, topP: $topP);
     }
 }
